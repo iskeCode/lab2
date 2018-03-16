@@ -121,6 +121,32 @@ architecture rtl of top is
   );
   end component;
   
+  component reg is
+	generic(
+		WIDTH    : positive := 1;
+		RST_INIT : integer := 0
+	);
+	port(
+		i_clk  : in  std_logic;
+		in_rst : in  std_logic;
+		i_d    : in  std_logic_vector(WIDTH-1 downto 0);
+		o_q    : out std_logic_vector(WIDTH-1 downto 0)
+	);
+	end component;
+	
+	component clk_counter IS 
+	 GENERIC(
+				-- maksimalna vrednost broja do kojeg brojac broji
+				max_cnt : STD_LOGIC_VECTOR(25 DOWNTO 0) := "10111110101111000010000000" -- 50 000 000
+			  );
+	 PORT   (
+				 clk_i     : IN  STD_LOGIC; -- ulazni takt
+				 rst_i     : IN  STD_LOGIC; -- reset signal
+				 cnt_en_i  : IN  STD_LOGIC; -- signal dozvole brojanja
+				 cnt_rst_i : IN  STD_LOGIC; -- signal resetovanja brojaca (clear signal)
+				 one_sec_o : OUT STD_LOGIC  -- izlaz koji predstavlja proteklu jednu sekundu vremena
+			  );
+	END component;
   
   constant update_period     : std_logic_vector(31 downto 0) := conv_std_logic_vector(1, 32);
   
@@ -140,10 +166,10 @@ architecture rtl of top is
   signal frame_color         : std_logic_vector(23 downto 0);
 
   signal char_we             : std_logic;
-  signal char_address        : std_logic_vector(MEM_ADDR_WIDTH-1 downto 0);
+  signal char_address, char_address_next: std_logic_vector(MEM_ADDR_WIDTH-1 downto 0);
   signal char_value          : std_logic_vector(5 downto 0);
 
-  signal pixel_address       : std_logic_vector(GRAPH_MEM_ADDR_WIDTH-1 downto 0);
+  signal pixel_address, pixel_address_next: std_logic_vector(GRAPH_MEM_ADDR_WIDTH-1 downto 0);
   signal pixel_value         : std_logic_vector(GRAPH_MEM_DATA_WIDTH-1 downto 0);
   signal pixel_we            : std_logic;
 
@@ -156,7 +182,11 @@ architecture rtl of top is
   signal dir_blue            : std_logic_vector(7 downto 0);
   signal dir_pixel_column    : std_logic_vector(10 downto 0);
   signal dir_pixel_row       : std_logic_vector(10 downto 0);
-
+	
+  signal color_s				  : std_logic_vector(23 downto 0);
+  signal char_col_next_s, char_col_s   : std_logic_vector(MEM_ADDR_WIDTH-1 downto 0);
+  signal one_sec_s			  : std_logic;
+  
 begin
 
   -- calculate message lenght from font size
@@ -168,13 +198,13 @@ begin
   graphics_lenght <= conv_std_logic_vector(MEM_SIZE*8*8, GRAPH_MEM_ADDR_WIDTH);
   
   -- removed to inputs pin
-  direct_mode <= '1';
-  display_mode     <= "10";  -- 01 - text mode, 10 - graphics mode, 11 - text & graphics
-  
-  font_size        <= x"1";
-  show_frame       <= '1';
-  foreground_color <= x"FFFFFF";
-  background_color <= x"000000";
+  direct_mode <= '0';	-- 1 - direct mode, 0 - text mode 
+  display_mode     <= "01";  -- 01 - text mode, 10 - graphics mode, 11 - text & graphics
+
+  font_size        <= x"1";	-- b00 - 8, b01 - 16, b10 - 32, b11 - 64
+  show_frame       <= '0';	-- makes a frame on the display
+  foreground_color <= x"FFFF00";
+  background_color <= x"0000ff";
   frame_color      <= x"FF0000";
 
   clk5m_inst : ODDR2
@@ -246,20 +276,129 @@ begin
     blue_o             => blue_o     
   );
   
-  -- na osnovu signala iz vga_top modula dir_pixel_column i dir_pixel_row realizovati logiku koja genereise
-  --dir_red
-  --dir_green
-  --dir_blue
+---------------DIRECT MODE-------------------
+  dir_red <= color_s(23 downto 16);
+  dir_green <= color_s(15 downto 8);
+  dir_blue <= color_s(7 downto 0);
+  
+-----------------LINIJE----------------------
+
+--  dir_red <= x"ff" when dir_pixel_column < 80 else
+--					x"ff" when dir_pixel_column > 80 and dir_pixel_column < 160 else
+--					x"00" when dir_pixel_column > 160 and dir_pixel_column < 240 else
+--					x"00" when dir_pixel_column > 240 and dir_pixel_column < 320 else
+--					x"ff" when dir_pixel_column > 320 and dir_pixel_column < 400 else
+--					x"ff" when dir_pixel_column > 400 and dir_pixel_column < 480 else
+--					x"ff" when dir_pixel_column > 480 and dir_pixel_column < 560 else
+--					x"00";
+--				
+--  dir_green <= x"ff" when dir_pixel_column < 80 else
+--					x"00" when dir_pixel_column > 80 and dir_pixel_column < 160 else
+--					x"ff" when dir_pixel_column > 160 and dir_pixel_column < 240 else
+--					x"00" when dir_pixel_column > 240 and dir_pixel_column < 320 else
+--					x"ff" when dir_pixel_column > 320 and dir_pixel_column < 400 else
+--					x"00" when dir_pixel_column > 400 and dir_pixel_column < 480 else
+--					x"ff" when dir_pixel_column > 480 and dir_pixel_column < 560 else
+--					x"00";
+--				
+--  dir_blue	<= x"ff" when dir_pixel_column < 80 else
+--					x"00" when dir_pixel_column > 80 and dir_pixel_column < 160 else
+--					x"00" when dir_pixel_column > 160 and dir_pixel_column < 240 else
+--					x"ff" when dir_pixel_column > 240 and dir_pixel_column < 320 else
+--					x"00" when dir_pixel_column > 320 and dir_pixel_column < 400 else
+--					x"ff" when dir_pixel_column > 400 and dir_pixel_column < 480 else
+--					x"ff" when dir_pixel_column > 480 and dir_pixel_column < 560 else
+--					x"00";
+			------drugi nacin realizacije--------
+--color_s <= x"ffffff" when dir_pixel_column < 80 else
+--					x"00ffff" when dir_pixel_column > 80 and dir_pixel_column < 160 else
+--					x"ff00ff" when dir_pixel_column > 160 and dir_pixel_column < 240 else
+--					x"ffff00" when dir_pixel_column > 240 and dir_pixel_column < 320 else
+--					x"0000ff" when dir_pixel_column > 320 and dir_pixel_column < 400 else
+--					x"ff0000" when dir_pixel_column > 400 and dir_pixel_column < 480 else
+--					x"00ff00" when dir_pixel_column > 480 and dir_pixel_column < 560 else
+--					x"000000";
+
  
-  -- koristeci signale realizovati logiku koja pise po TXT_MEM
-  --char_address
-  --char_value
-  --char_we
+ ----------------LOGIKA ZA ISPIS TEKSTA--------------
+ --logika za kretanje kroz ROM
+   reg_char_addr_i:reg
+	generic map(
+		WIDTH    => 14,
+		RST_INIT => 0
+	)
+	port map(
+		i_clk  => pix_clock_s,
+		in_rst => reset_n_i,
+		i_d    => char_address_next,
+		o_q    => char_address
+	);
+	
+	char_address_next <= char_address + 1 when char_address < 4800 else
+								(others => '0');
+								
+ --logika za pomeranje teksta 
+   reg_move_i:reg
+	generic map(
+		WIDTH    => 14,
+		RST_INIT => 0
+	)
+	port map(
+		i_clk  => pix_clock_s,
+		in_rst => reset_n_i,
+		i_d    => char_col_next_s,
+		o_q    => char_col_s
+	);
+	
+	clk_second:clk_counter
+	GENERIC map(
+				-- maksimalna vrednost broja do kojeg brojac broji
+				max_cnt => conv_std_logic_vector(5000000,26)
+			  )
+	 port map(
+				 clk_i     => pix_clock_s,
+				 rst_i     => not(reset_n_i),
+				 cnt_en_i  => '1', 
+				 cnt_rst_i => '0',
+				 one_sec_o => one_sec_s
+			  );
+	
+	char_col_next_s <= char_col_s + 1 when char_col_s < 80 and one_sec_s = '1' else
+						char_col_s when char_col_s < 80 else
+						(others => '0');
+	
+--  vesna isic
+--  0123456789
+  char_value <= conv_std_logic_vector(22, 6) when char_address = char_col_s else
+					conv_std_logic_vector(5, 6) when char_address = char_col_s + 1 else
+					conv_std_logic_vector(19, 6) when char_address = char_col_s + 2 or char_address = char_col_s + 7 else
+					conv_std_logic_vector(14, 6) when char_address = char_col_s + 3 else
+					conv_std_logic_vector(1, 6) when char_address = char_col_s + 4 else
+					conv_std_logic_vector(9, 6) when char_address = char_col_s + 6 or char_address = char_col_s + 8 else
+					conv_std_logic_vector(3, 6) when char_address = char_col_s + 9 else
+					conv_std_logic_vector(32, 6);	
+  
+  char_we <= '1';
   
   -- koristeci signale realizovati logiku koja pise po GRAPH_MEM
-  --pixel_address
+   ----------------LOGIKA ZA ISCRTAVANJE KVADRATA--------------
+ --logika za kretanje kroz ROM
+--   reg_graph_addr_i:reg
+--	generic map(
+--		WIDTH    => 32,
+--		RST_INIT => 0
+--	)
+--	port map(
+--		i_clk  => pix_clock_s,
+--		in_rst => reset_n_i,
+--		i_d    => pixel_address_next,
+--		o_q    => pixel_address
+--	);
+--	
+--	pixel_address_next <= pixel_address + 1 when pixel_address < 4800 else
+--								(others => '0');
   --pixel_value
-  --pixel_we
+  --pixel_we <= '1';
   
   
 end rtl;
